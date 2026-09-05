@@ -15,8 +15,12 @@ const ANALYSIS_ONLY = process.argv.includes("--analyze-only");
 const LOCK_FILE = path.join(DATA_DIR, ANALYSIS_ONLY ? "analysis-bot.lock" : "paper-bot.lock");
 const API_LOCK_FILE = path.join(DATA_DIR, "binance-api.lock");
 const API_COOLDOWN_FILE = path.join(DATA_DIR, "binance-api-cooldown.json");
+const API_RATE_FILE = path.join(DATA_DIR, "binance-api-rate.json");
 const API = "https://fapi.binance.com";
-const API_MIN_INTERVAL_MS = 60;
+// Keep the full-market scan, but spread public REST calls out so concurrent
+// workers cannot burst the shared Binance IP quota.
+const API_MIN_INTERVAL_MS = 200;
+const API_JITTER_MS = 40;
 const API_TIMEOUT_MS = 8000;
 let nextApiAt = 0;
 let apiSchedule = Promise.resolve();
@@ -31,9 +35,11 @@ async function acquireApiSlot() {
       const handle = await fs.open(API_LOCK_FILE, "wx");
       await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }), "utf8");
       await handle.close();
-      const wait = Math.max(0, nextApiAt - Date.now());
+      const sharedRate = await readJson(API_RATE_FILE, { nextAt: 0 });
+      const wait = Math.max(0, nextApiAt - Date.now(), Number(sharedRate.nextAt || 0) - Date.now());
       if (wait) await sleep(wait);
-      nextApiAt = Date.now() + API_MIN_INTERVAL_MS;
+      nextApiAt = Date.now() + API_MIN_INTERVAL_MS + Math.floor(Math.random() * API_JITTER_MS);
+      await writeJson(API_RATE_FILE, { nextAt: nextApiAt, updatedAt: now(), pid: process.pid });
       return;
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
@@ -153,6 +159,11 @@ async function api(pathname) {
       await sleep(Math.min(backoffMs, 3000));
   }
   throw lastError;
+}
+
+function isApiThrottleError(error) {
+  return /Binance API (418|429)/i.test(String(error?.message)) ||
+    /banned until|API cooldown/i.test(String(error?.message));
 }
 
 function pickUniverse(exchangeInfo, tickers, config) {
@@ -413,12 +424,15 @@ async function scan(config, state) {
     }));
   } else {
     try {
-      const [exchangeInfo, tickers] = await Promise.all([
-        api("/fapi/v1/exchangeInfo"), api("/fapi/v1/ticker/24hr")
-      ]);
+      // Avoid a burst at scan start; these responses are cheap to fetch and
+      // are intentionally requested one after the other.
+      const exchangeInfo = await api("/fapi/v1/exchangeInfo");
+      const tickers = await api("/fapi/v1/ticker/24hr");
       universe = pickUniverse(exchangeInfo, tickers, config);
       allTickerMap = new Map(tickers.map((t) => [t.symbol, t]));
     } catch (error) {
+      // Never fan out fallback requests after a throttle/ban response.
+      if (isApiThrottleError(error)) throw error;
       state.events.push({ type: "UNIVERSE_FALLBACK", at: now(), error: String(error.message) });
       let fallbackSource;
       try { fallbackSource = await api("/fapi/v1/ticker/bookTicker"); }
@@ -460,15 +474,15 @@ async function scan(config, state) {
     }
   }
   const analysisUniverse = universe.slice(0, config.strategy.deepAnalysisSymbols > 0 ? config.strategy.deepAnalysisSymbols : undefined);
-  for (let i = 0; analysisMode && i < analysisUniverse.length; i += 8) {
-    const batch = analysisUniverse.slice(i, i + 8);
+  // Four symbols per batch, with each symbol's requests serialized. This
+  // caps in-flight REST calls and preserves a complete scan without bursts.
+  for (let i = 0; analysisMode && i < analysisUniverse.length; i += 4) {
+    const batch = analysisUniverse.slice(i, i + 4);
     const analyzed = await Promise.all(batch.map(async (t) => {
       try {
-        const [klines, higherKlines, oi] = await Promise.all([
-          api(`/fapi/v1/klines?symbol=${encodeURIComponent(t.symbol)}&interval=15m&limit=30`),
-          api(`/fapi/v1/klines?symbol=${encodeURIComponent(t.symbol)}&interval=1h&limit=60`),
-          api(`/fapi/v1/openInterest?symbol=${encodeURIComponent(t.symbol)}`)
-        ]);
+        const klines = await api(`/fapi/v1/klines?symbol=${encodeURIComponent(t.symbol)}&interval=15m&limit=30`);
+        const higherKlines = await api(`/fapi/v1/klines?symbol=${encodeURIComponent(t.symbol)}&interval=1h&limit=60`);
+        const oi = await api(`/fapi/v1/openInterest?symbol=${encodeURIComponent(t.symbol)}`);
         const premium = premiumMap.get(t.symbol) || {};
         return analyze(t.symbol, t, klines, {
           fundingRate: premium.lastFundingRate,
@@ -477,6 +491,7 @@ async function scan(config, state) {
           regime
         }, config);
       } catch (error) {
+        if (isApiThrottleError(error)) throw error;
         state.events.push({ type: "DATA_ERROR", at: now(), symbol: t.symbol, error: String(error.message) });
         return null;
       }

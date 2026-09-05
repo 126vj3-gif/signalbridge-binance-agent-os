@@ -13,6 +13,7 @@ export class BinanceMcpClient {
     this.initialized = false;
     this.sessionId = "";
     this.auditFile = options.auditFile || "";
+    this.cooldownUntil = 0;
   }
 
   async audit(event) {
@@ -22,6 +23,9 @@ export class BinanceMcpClient {
 
   async request(method, params = {}) {
     if (!this.endpoint) throw new Error("BINANCE_MCP_ENDPOINT is not configured");
+    if (this.cooldownUntil > Date.now()) {
+      throw new Error(`Binance MCP cooldown until ${new Date(this.cooldownUntil).toISOString()}`);
+    }
     const notification = method.startsWith("notifications/");
     const id = notification ? undefined : ++this.requestId;
     const controller = new AbortController();
@@ -55,11 +59,28 @@ export class BinanceMcpClient {
           throw new Error("Binance MCP HTTP 401 Unauthorized: complete OAuth in the MCP client, or provide BINANCE_MCP_AUTH_TOKEN to this standalone process");
         }
         if (response.status === 403) throw new Error("Binance MCP HTTP 403 Forbidden: the authorized account lacks the requested permission");
+        if ([418, 429].includes(response.status)) {
+          const retryAfter = Number(response.headers.get("retry-after"));
+          const match = text.match(/banned until\s+(\d+)/i);
+          const until = Number(match?.[1]);
+          this.cooldownUntil = Number.isFinite(until) && until > Date.now()
+            ? until + 60_000
+            : Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 15 * 60_000);
+        }
         throw new Error(`Binance MCP HTTP ${response.status}: ${text.slice(0, 300)}`);
       }
       if (notification || !text.trim()) return null;
       const payload = parseMcpPayload(text, response.headers.get("content-type") || "", id);
-      if (payload.error) throw new Error(`Binance MCP ${payload.error.code}: ${payload.error.message}`);
+      if (payload.error) {
+        const message = String(payload.error.message || "");
+        if (payload.error.code === -1003 || /too many requests|banned until/i.test(message)) {
+          const match = message.match(/banned until\s+(\d+)/i);
+          this.cooldownUntil = Number(match?.[1]) > Date.now()
+            ? Number(match[1]) + 60_000
+            : Date.now() + 15 * 60_000;
+        }
+        throw new Error(`Binance MCP ${payload.error.code}: ${message}`);
+      }
       return payload.result;
     } finally { clearTimeout(timer); }
   }
@@ -116,7 +137,11 @@ export async function withRetry(task, attempts = 2) {
   let error;
   for (let i = 0; i < attempts; i += 1) {
     try { return await task(); }
-    catch (err) { error = err; if (i + 1 < attempts) await sleep(500 * (i + 1)); }
+    catch (err) {
+      error = err;
+      if (/too many requests|banned until|cooldown|HTTP 418|HTTP 429|-1003/i.test(String(err?.message))) break;
+      if (i + 1 < attempts) await sleep(500 * (i + 1));
+    }
   }
   throw error;
 }
