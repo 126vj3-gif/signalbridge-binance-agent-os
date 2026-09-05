@@ -7,4 +7,12 @@
 5. Show the final `PAPER_TRADE_PREVIEW` and the appended `data/submission-demo.ndjson` audit record.
 6. Explain that the repository separates the analyst from the executor: the analyst proposes, MCP re-checks market state, and the executor can only simulate in this submission build.
 
+For a one-shot live-data scan check on Windows, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run-analysis.ps1 -Once
+```
+
+This command keeps the repository's proxy detection and exits after one scan; it does not place orders.
+
 The fixture is deterministic and labelled as a demo fixture. It is not a recommendation or a claim about the live market.
