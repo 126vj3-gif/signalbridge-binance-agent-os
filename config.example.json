@@ -1,0 +1,47 @@
+{
+  "mode": "paper",
+  "executionOnly": true,
+  "strictSignalSource": true,
+  "mcp": { "enabled": false, "readOnly": true, "allowTrading": false, "endpoint": "" },
+  "intervalMs": 300000,
+  "bridge": { "host": "127.0.0.1", "port": 18787 },
+  "universe": {
+    "quoteAsset": "USDT",
+    "exclude": ["BTCUSDT", "ETHUSDT"],
+    "minQuoteVolume24h": 10000000,
+    "maxSymbolsPerScan": 0,
+    "minListingAgeDays": 14
+  },
+  "strategy": {
+    "minMove24hPct": 4,
+    "minVolumeRatio": 1.5,
+    "minScore": 5,
+    "deepAnalysisSymbols": 0,
+    "strictFullMarketScan": true,
+    "atrPeriod": 14,
+    "minAtrPct": 0.25,
+    "maxAtrPct": 8,
+    "atrStopMultiplier": 1.5,
+    "minStopPct": 1,
+    "maxStopPct": 3,
+    "rewardRisk": 2,
+    "maxSpreadPct": 0.15,
+    "maxAbsFundingRate": 0.001,
+    "minOpenInterestUsd": 1000000
+  },
+  "risk": {
+    "marginPerTradeUsdt": 20,
+    "leverage": 3,
+    "maxRiskPctPerTrade": 0.5,
+    "maxDailyLossPct": 2,
+    "maxOpenPositions": 2,
+    "stopLossPct": 1.5,
+    "takeProfitPct": 3,
+    "cooldownMinutes": 60,
+    "paperEquityUsdt": 1000,
+    "takerFeePct": 0.05,
+    "slippagePct": 0.05,
+    "maxSignalPriceDeviationPct": 1
+    ,"maxSignalStopPct": 3
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "submission-demo-solusdt-001",
+  "symbol": "SOLUSDT",
+  "side": "LONG",
+  "entry": 100,
+  "stop": 98.5,
+  "target": 103,
+  "expiresAt": "2099-01-01T00:00:00.000Z",
+  "analysis": "Deterministic demo fixture for the submission walkthrough; not a market call.",
+  "source": "submission-demo-fixture"
+}

@@ -1,0 +1,9 @@
+{
+  "provider": "binance-mcp",
+  "endpoint": "https://agent.binance.com/mcp/agentic",
+  "timeoutMs": 15000,
+  "authTokenEnv": "BINANCE_MCP_AUTH_TOKEN",
+  "readOnly": true,
+  "allowTrading": false,
+  "auditFile": "data/mcp-audit.ndjson"
+}
